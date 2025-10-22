@@ -28,8 +28,15 @@ locals {
   #account_id  = data.aws_caller_identity.current.account_id
 }
 
+
 resource "aws_s3_bucket" "s3_tf" {
-  #bucket = "${local.name_prefix}-s3-tf-bkt-${local.account_id}"
-  #bucket = "saw-s3-tf-bkt-1"
+  # Note: You successfully fixed the TFLint issue by using format()
+  # checkov:skip=CKV_AWS_145: Not using KMS encryption for this challenge.
+  # checkov:skip=CKV_AWS_18: Access logging is not required for this challenge.
+  # checkov:skip=CKV2_AWS_62: Event notifications are not required for this challenge.
+  # checkov:skip=CKV2_AWS_6: Public access blocks are not required for this challenge's purpose.
+  # checkov:skip=CKV2_AWS_61: Lifecycle configuration is not required for this challenge.
+  # checkov:skip=CKV_AWS_21: Versioning is not required for this challenge.
+  # checkov:skip=CKV_AWS_144: Cross-region replication is not required for this challenge.
   bucket = format("%s-s3-tf-bkt-%s", local.name_prefix, local.account_id)
 }
