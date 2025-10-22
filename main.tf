@@ -4,8 +4,8 @@ provider "aws" {
 
 terraform {
 
-required_version = ">= 1.0.0" # Specify a suitable version constraint
-  
+  required_version = ">= 1.0.0" # Specify a suitable version constraint
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -22,8 +22,8 @@ required_version = ">= 1.0.0" # Specify a suitable version constraint
 data "aws_caller_identity" "current" {}
 
 locals {
-    name_prefix = split("/", data.aws_caller_identity.current.arn)[1]
- # name_prefix = split("/", "${data.aws_caller_identity.current.arn}")[1] #if your name contains any invalid characters like “.”, hardcode this name_prefix value = <YOUR NAME>
+  name_prefix = split("/", data.aws_caller_identity.current.arn)[1]
+  # name_prefix = split("/", "${data.aws_caller_identity.current.arn}")[1] #if your name contains any invalid characters like “.”, hardcode this name_prefix value = <YOUR NAME>
   account_id = data.aws_caller_identity.current.account_id
   #account_id  = data.aws_caller_identity.current.account_id
 }
