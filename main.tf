@@ -22,8 +22,10 @@ required_version = ">= 1.0.0" # Specify a suitable version constraint
 data "aws_caller_identity" "current" {}
 
 locals {
-  name_prefix = split("/", "${data.aws_caller_identity.current.arn}")[1] #if your name contains any invalid characters like “.”, hardcode this name_prefix value = <YOUR NAME>
-  account_id  = data.aws_caller_identity.current.account_id
+    name_prefix = split("/", data.aws_caller_identity.current.arn)[1]
+ # name_prefix = split("/", "${data.aws_caller_identity.current.arn}")[1] #if your name contains any invalid characters like “.”, hardcode this name_prefix value = <YOUR NAME>
+  account_id = data.aws_caller_identity.current.account_id
+  #account_id  = data.aws_caller_identity.current.account_id
 }
 
 resource "aws_s3_bucket" "s3_tf" {
