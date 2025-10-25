@@ -43,9 +43,9 @@ resource "aws_s3_bucket" "s3_tf" {
 
 # DynamoDB Table for URL shortener
 resource "aws_dynamodb_table" "url_table" {
-  name           = "${local.name_prefix}-url-shortener"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "short_id"
+  name         = "${local.name_prefix}-url-shortener"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "short_id"
 
   attribute {
     name = "short_id"
@@ -60,7 +60,7 @@ resource "aws_dynamodb_table" "url_table" {
 
 # CloudWatch Log Group for WAF
 resource "aws_cloudwatch_log_group" "waf_logs" {
-  name              = "/aws/wafv2/${local.name_prefix}-api-gw-waf"
+  name              = "aws-waf-logs-${local.name_prefix}-api-gw"
   retention_in_days = 7
 }
 
@@ -269,9 +269,38 @@ data "aws_route53_zone" "main" {
   private_zone = false
 }
 
-data "aws_acm_certificate" "main" {
-  domain   = "*.sctp-sandbox.com"
-  statuses = ["ISSUED"]
+# ACM Certificate for custom domain
+resource "aws_acm_certificate" "main" {
+  domain_name       = "*.sctp-sandbox.com"
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# ACM Certificate Validation
+resource "aws_acm_certificate_validation" "main" {
+  certificate_arn         = aws_acm_certificate.main.arn
+  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
+}
+
+# Route53 records for ACM certificate validation
+resource "aws_route53_record" "cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.main.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = data.aws_route53_zone.main.zone_id
 }
 
 resource "aws_route53_record" "www" {
@@ -288,11 +317,13 @@ resource "aws_route53_record" "www" {
 
 resource "aws_api_gateway_domain_name" "shortener" {
   domain_name              = "${local.name_prefix}.sctp-sandbox.com"
-  regional_certificate_arn = data.aws_acm_certificate.main.arn
+  regional_certificate_arn = aws_acm_certificate.main.arn
 
   endpoint_configuration {
     types = ["REGIONAL"]
   }
+
+  depends_on = [aws_acm_certificate_validation.main]
 }
 
 resource "aws_api_gateway_base_path_mapping" "shortener" {
@@ -304,7 +335,7 @@ resource "aws_api_gateway_base_path_mapping" "shortener" {
 resource "aws_wafv2_web_acl_logging_configuration" "api_gw_waf_logging" {
   resource_arn = aws_wafv2_web_acl.api_gw_waf.arn
   log_destination_configs = [
-    aws_cloudwatch_log_group.waf_logs.arn
+    "${aws_cloudwatch_log_group.waf_logs.arn}:*"
   ]
 
   logging_filter {
@@ -410,4 +441,30 @@ resource "aws_api_gateway_integration_response" "get_integration_response" {
   depends_on = [
     aws_api_gateway_integration.get_integration
   ]
+}
+
+# Outputs
+output "application_domain" {
+  description = "Custom domain for the URL shortener application"
+  value       = "https://${aws_api_gateway_domain_name.shortener.domain_name}"
+}
+
+output "api_gateway_url" {
+  description = "API Gateway invoke URL (fallback)"
+  value       = "${aws_api_gateway_stage.api.invoke_url}"
+}
+
+output "create_url_endpoint" {
+  description = "Endpoint to create short URLs"
+  value       = "https://${aws_api_gateway_domain_name.shortener.domain_name}/newurl"
+}
+
+output "dynamodb_table" {
+  description = "DynamoDB table name for URL storage"
+  value       = aws_dynamodb_table.url_table.name
+}
+
+output "waf_web_acl_arn" {
+  description = "WAF Web ACL ARN protecting the API"
+  value       = aws_wafv2_web_acl.api_gw_waf.arn
 }
