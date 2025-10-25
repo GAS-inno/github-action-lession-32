@@ -48,6 +48,7 @@ resource "aws_s3_bucket" "s3_tf" {
 # DynamoDB Table for URL shortener
 resource "aws_dynamodb_table" "url_table" {
   # checkov:skip=CKV_AWS_119: KMS encryption is not required for this challenge
+  # checkov:skip=CKV_AWS_28: Point-in-time recovery is not required for this challenge
   name         = "${local.name_prefix}-url-shortener"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "short_id"
