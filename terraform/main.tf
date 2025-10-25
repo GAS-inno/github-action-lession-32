@@ -40,3 +40,62 @@ resource "aws_s3_bucket" "s3_tf" {
   # checkov:skip=CKV_AWS_144: Cross-region replication is not required for this challenge.
   bucket = format("%s-s3-tf-bkt-%s", local.name_prefix, local.account_id)
 }
+
+resource "aws_iam_role" "lambda_role" {
+  name = "lambda-role-url-shortener"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Effect = "Allow",
+      Principal = { Service = "lambda.amazonaws.com" },
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_lambda_function" "create_url" {
+  function_name = "create-url-lambda"
+  runtime       = "python3.12"
+  handler       = "create-url-lambda.lambda_handler"
+  role          = aws_iam_role.lambda_role.arn
+  filename      = "lambda/create-url-lambda.zip"
+
+  environment {
+    variables = {
+      APP_URL     = "https://group2-urlshortener.sctp-sandbox.com/"
+      REGION_AWS  = "ap-southeast-1"
+      DB_NAME     = aws_dynamodb_table.urls.name
+      MIN_CHAR    = 12
+      MAX_CHAR    = 16
+    }
+  }
+
+  tracing_config {
+    mode = "Active" # X-Ray enabled
+  }
+}
+
+resource "aws_lambda_function" "retrieve_url" {
+  function_name = "retrieve-url-lambda"
+  runtime       = "python3.12"
+  handler       = "retrieve-url-lambda.lambda_handler"
+  role          = aws_iam_role.lambda_role.arn
+  filename      = "lambda/retrieve-url-lambda.zip"
+
+  environment {
+    variables = {
+      REGION_AWS = "ap-southeast-1"
+      DB_NAME    = aws_dynamodb_table.urls.name
+    }
+  }
+
+  tracing_config {
+    mode = "Active"
+  }
+}
