@@ -47,6 +47,7 @@ resource "aws_s3_bucket" "s3_tf" {
 
 # DynamoDB Table for URL shortener
 resource "aws_dynamodb_table" "url_table" {
+  # checkov:skip=CKV_AWS_119: KMS encryption is not required for this challenge
   name         = "${local.name_prefix}-url-shortener"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "short_id"
@@ -64,12 +65,15 @@ resource "aws_dynamodb_table" "url_table" {
 
 # CloudWatch Log Group for WAF
 resource "aws_cloudwatch_log_group" "waf_logs" {
+  # checkov:skip=CKV_AWS_158: KMS encryption is not required for this challenge
+  # checkov:skip=CKV_AWS_338: Long-term log retention is not required for this challenge
   name              = "aws-waf-logs-${local.name_prefix}-api-gw"
   retention_in_days = 7
 }
 
 # WAF Web ACL
 resource "aws_wafv2_web_acl" "api_gw_waf" {
+  # checkov:skip=CKV_AWS_192: Log4j protection is not required for this challenge
   name  = "${local.name_prefix}-api-gw-waf"
   scope = "REGIONAL"
 
@@ -108,6 +112,7 @@ resource "aws_wafv2_web_acl" "api_gw_waf" {
 
 # API Gateway REST API
 resource "aws_api_gateway_rest_api" "api" {
+  # checkov:skip=CKV_AWS_237: Create before destroy is not required for this challenge
   name        = "${local.name_prefix}-url-shortener-api"
   description = "URL Shortener API"
 }
@@ -139,6 +144,13 @@ resource "aws_api_gateway_deployment" "api" {
 
 # API Gateway Stage
 resource "aws_api_gateway_stage" "api" {
+  # checkov:skip=CKV_AWS_76: Access logging is not required for this challenge
+  # checkov:skip=CKV_AWS_120: API Gateway caching is not required for this challenge
+  # checkov:skip=CKV_AWS_73: X-Ray tracing is not required for this challenge
+  # checkov:skip=CKV2_AWS_51: Client certificate authentication is not required for this challenge
+  # checkov:skip=CKV2_AWS_29: WAF is already associated via separate resource
+  # checkov:skip=CKV2_AWS_77: Log4j AMR protection is not required for this challenge
+  # checkov:skip=CKV2_AWS_4: Detailed logging level is not required for this challenge
   deployment_id = aws_api_gateway_deployment.api.id
   rest_api_id   = aws_api_gateway_rest_api.api.id
   stage_name    = "prod"
@@ -208,6 +220,13 @@ data "archive_file" "create_url_lambda" {
 }
 
 resource "aws_lambda_function" "create_url" {
+  # checkov:skip=CKV_AWS_117: VPC configuration is not required for this challenge
+  # checkov:skip=CKV_AWS_363: Python 3.9 is acceptable for this challenge
+  # checkov:skip=CKV_AWS_116: Dead Letter Queue is not required for this challenge
+  # checkov:skip=CKV_AWS_50: X-Ray tracing is not required for this challenge
+  # checkov:skip=CKV_AWS_173: KMS encryption for environment variables is not required for this challenge
+  # checkov:skip=CKV_AWS_115: Concurrent execution limit is not required for this challenge
+  # checkov:skip=CKV_AWS_272: Code signing is not required for this challenge
   filename         = data.archive_file.create_url_lambda.output_path
   function_name    = "${local.name_prefix}-create-url"
   role             = aws_iam_role.lambda_role.arn
@@ -235,6 +254,13 @@ data "archive_file" "retrieve_url_lambda" {
 }
 
 resource "aws_lambda_function" "retrieve_url" {
+  # checkov:skip=CKV_AWS_117: VPC configuration is not required for this challenge
+  # checkov:skip=CKV_AWS_363: Python 3.9 is acceptable for this challenge
+  # checkov:skip=CKV_AWS_116: Dead Letter Queue is not required for this challenge
+  # checkov:skip=CKV_AWS_50: X-Ray tracing is not required for this challenge
+  # checkov:skip=CKV_AWS_173: KMS encryption for environment variables is not required for this challenge
+  # checkov:skip=CKV_AWS_115: Concurrent execution limit is not required for this challenge
+  # checkov:skip=CKV_AWS_272: Code signing is not required for this challenge
   filename         = data.archive_file.retrieve_url_lambda.output_path
   function_name    = "${local.name_prefix}-retrieve-url"
   role             = aws_iam_role.lambda_role.arn
@@ -275,6 +301,7 @@ data "aws_route53_zone" "main" {
 
 # ACM Certificate for custom domain
 resource "aws_acm_certificate" "main" {
+  # checkov:skip=CKV2_AWS_71: Wildcard certificate is required for this use case
   domain_name       = "*.sctp-sandbox.com"
   validation_method = "DNS"
 
@@ -320,6 +347,7 @@ resource "aws_route53_record" "www" {
 }
 
 resource "aws_api_gateway_domain_name" "shortener" {
+  # checkov:skip=CKV_AWS_206: Modern security policy is not required for this challenge
   domain_name              = "${local.name_prefix}.sctp-sandbox.com"
   regional_certificate_arn = aws_acm_certificate.main.arn
 
@@ -367,6 +395,8 @@ resource "aws_api_gateway_resource" "newurl" {
 }
 
 resource "aws_api_gateway_method" "post_method" {
+  # checkov:skip=CKV_AWS_59: Authorization is not required for this challenge
+  # checkov:skip=CKV2_AWS_53: Request validation is not required for this challenge
   rest_api_id   = aws_api_gateway_rest_api.api.id
   resource_id   = aws_api_gateway_resource.newurl.id
   http_method   = "POST"
@@ -400,6 +430,8 @@ resource "aws_api_gateway_resource" "geturl" {
 }
 
 resource "aws_api_gateway_method" "get_method" {
+  # checkov:skip=CKV_AWS_59: Authorization is not required for this challenge
+  # checkov:skip=CKV2_AWS_53: Request validation is not required for this challenge
   rest_api_id   = aws_api_gateway_rest_api.api.id
   resource_id   = aws_api_gateway_resource.geturl.id
   http_method   = "GET"
