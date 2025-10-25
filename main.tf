@@ -41,18 +41,265 @@ resource "aws_s3_bucket" "s3_tf" {
   bucket = format("%s-s3-tf-bkt-%s", local.name_prefix, local.account_id)
 }
 
-resource "aws_route53_record" "www" {}
+# DynamoDB Table for URL shortener
+resource "aws_dynamodb_table" "url_table" {
+  name           = "${local.name_prefix}-url-shortener"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "short_id"
+
+  attribute {
+    name = "short_id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+}
+
+# CloudWatch Log Group for WAF
+resource "aws_cloudwatch_log_group" "waf_logs" {
+  name              = "/aws/wafv2/${local.name_prefix}-api-gw-waf"
+  retention_in_days = 7
+}
+
+# WAF Web ACL
+resource "aws_wafv2_web_acl" "api_gw_waf" {
+  name  = "${local.name_prefix}-api-gw-waf"
+  scope = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${local.name_prefix}-api-gw-waf"
+    sampled_requests_enabled   = true
+  }
+
+  rule {
+    name     = "RateLimitRule"
+    priority = 1
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 2000
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "RateLimitRule"
+      sampled_requests_enabled   = true
+    }
+  }
+}
+
+# API Gateway REST API
+resource "aws_api_gateway_rest_api" "api" {
+  name        = "${local.name_prefix}-url-shortener-api"
+  description = "URL Shortener API"
+}
+
+# API Gateway Deployment
+resource "aws_api_gateway_deployment" "api" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_resource.newurl.id,
+      aws_api_gateway_method.post_method.id,
+      aws_api_gateway_integration.post_integration.id,
+      aws_api_gateway_resource.geturl.id,
+      aws_api_gateway_method.get_method.id,
+      aws_api_gateway_integration.get_integration.id,
+    ]))
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  depends_on = [
+    aws_api_gateway_integration.post_integration,
+    aws_api_gateway_integration.get_integration
+  ]
+}
+
+# API Gateway Stage
+resource "aws_api_gateway_stage" "api" {
+  deployment_id = aws_api_gateway_deployment.api.id
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  stage_name    = "prod"
+}
+
+# WAF Association with API Gateway
+resource "aws_wafv2_web_acl_association" "api_gw" {
+  resource_arn = aws_api_gateway_stage.api.arn
+  web_acl_arn  = aws_wafv2_web_acl.api_gw_waf.arn
+}
+
+# IAM Role for Lambda
+resource "aws_iam_role" "lambda_role" {
+  name = "${local.name_prefix}-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+# IAM Policy for Lambda
+resource "aws_iam_role_policy" "lambda_policy" {
+  name = "${local.name_prefix}-lambda-policy"
+  role = aws_iam_role.lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ]
+        Resource = aws_dynamodb_table.url_table.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+}
+
+# Lambda Function - Create URL
+data "archive_file" "create_url_lambda" {
+  type        = "zip"
+  source_file = "${path.module}/create_url_lambda.py"
+  output_path = "${path.module}/create_url_lambda.zip"
+}
+
+resource "aws_lambda_function" "create_url" {
+  filename         = data.archive_file.create_url_lambda.output_path
+  function_name    = "${local.name_prefix}-create-url"
+  role             = aws_iam_role.lambda_role.arn
+  handler          = "create_url_lambda.lambda_handler"
+  source_code_hash = data.archive_file.create_url_lambda.output_base64sha256
+  runtime          = "python3.9"
+  timeout          = 30
+
+  environment {
+    variables = {
+      APP_URL    = "https://${local.name_prefix}.sctp-sandbox.com/"
+      MIN_CHAR   = "12"
+      MAX_CHAR   = "16"
+      REGION_AWS = "us-east-1"
+      DB_NAME    = aws_dynamodb_table.url_table.name
+    }
+  }
+}
+
+# Lambda Function - Retrieve URL
+data "archive_file" "retrieve_url_lambda" {
+  type        = "zip"
+  source_file = "${path.module}/retrieve_url_lambda.py"
+  output_path = "${path.module}/retrieve_url_lambda.zip"
+}
+
+resource "aws_lambda_function" "retrieve_url" {
+  filename         = data.archive_file.retrieve_url_lambda.output_path
+  function_name    = "${local.name_prefix}-retrieve-url"
+  role             = aws_iam_role.lambda_role.arn
+  handler          = "retrieve_url_lambda.lambda_handler"
+  source_code_hash = data.archive_file.retrieve_url_lambda.output_base64sha256
+  runtime          = "python3.9"
+  timeout          = 30
+
+  environment {
+    variables = {
+      REGION_AWS = "us-east-1"
+      DB_NAME    = aws_dynamodb_table.url_table.name
+    }
+  }
+}
+
+# Lambda Permissions for API Gateway
+resource "aws_lambda_permission" "create_url_permission" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.create_url.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/*/*"
+}
+
+resource "aws_lambda_permission" "retrieve_url_permission" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.retrieve_url.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.api.execution_arn}/*/*/*"
+}
+
+data "aws_route53_zone" "main" {
+  name         = "sctp-sandbox.com"
+  private_zone = false
+}
+
+data "aws_acm_certificate" "main" {
+  domain   = "*.sctp-sandbox.com"
+  statuses = ["ISSUED"]
+}
+
+resource "aws_route53_record" "www" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "${local.name_prefix}.sctp-sandbox.com"
+  type    = "A"
+
+  alias {
+    name                   = aws_api_gateway_domain_name.shortener.regional_domain_name
+    zone_id                = aws_api_gateway_domain_name.shortener.regional_zone_id
+    evaluate_target_health = true
+  }
+}
 
 resource "aws_api_gateway_domain_name" "shortener" {
-  domain_name              = ""
-  regional_certificate_arn = "" # ACM Cert for your domain
+  domain_name              = "${local.name_prefix}.sctp-sandbox.com"
+  regional_certificate_arn = data.aws_acm_certificate.main.arn
 
   endpoint_configuration {
     types = ["REGIONAL"]
   }
 }
 
-resource "aws_api_gateway_base_path_mapping" "shortener" {}
+resource "aws_api_gateway_base_path_mapping" "shortener" {
+  api_id      = aws_api_gateway_rest_api.api.id
+  stage_name  = aws_api_gateway_stage.api.stage_name
+  domain_name = aws_api_gateway_domain_name.shortener.domain_name
+}
 
 resource "aws_wafv2_web_acl_logging_configuration" "api_gw_waf_logging" {
   resource_arn = aws_wafv2_web_acl.api_gw_waf.arn
@@ -78,17 +325,26 @@ resource "aws_wafv2_web_acl_logging_configuration" "api_gw_waf_logging" {
 }
 
 ############# CREATE URL RESOURCES#####################
-resource "aws_api_gateway_resource" "newurl" {}
+resource "aws_api_gateway_resource" "newurl" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_rest_api.api.root_resource_id
+  path_part   = "newurl"
+}
 
-resource "aws_api_gateway_method" "post_method" {}
+resource "aws_api_gateway_method" "post_method" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.newurl.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
 
 resource "aws_api_gateway_integration" "post_integration" {
-  rest_api_id             =
-  resource_id             = 
-  http_method             = 
+  rest_api_id             = aws_api_gateway_rest_api.api.id
+  resource_id             = aws_api_gateway_resource.newurl.id
+  http_method             = aws_api_gateway_method.post_method.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
-  uri                     = 
+  uri                     = aws_lambda_function.create_url.invoke_arn
 }
 
 resource "aws_api_gateway_method_response" "response_200" {
@@ -102,17 +358,26 @@ resource "aws_api_gateway_method_response" "response_200" {
   }
 }
 
-resource "aws_api_gateway_resource" "geturl" {}
+resource "aws_api_gateway_resource" "geturl" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  parent_id   = aws_api_gateway_rest_api.api.root_resource_id
+  path_part   = "{shortid}"
+}
 
-resource "aws_api_gateway_method" "get_method" {}
+resource "aws_api_gateway_method" "get_method" {
+  rest_api_id   = aws_api_gateway_rest_api.api.id
+  resource_id   = aws_api_gateway_resource.geturl.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
 
 resource "aws_api_gateway_integration" "get_integration" {
-  rest_api_id             =
-  resource_id             =
-  http_method             =
+  rest_api_id             = aws_api_gateway_rest_api.api.id
+  resource_id             = aws_api_gateway_resource.geturl.id
+  http_method             = aws_api_gateway_method.get_method.http_method
   integration_http_method = "POST"
   type                    = "AWS"
-  uri                     =
+  uri                     = aws_lambda_function.retrieve_url.invoke_arn
   request_templates = {
     "application/json" = <<EOF
     { 
@@ -123,9 +388,9 @@ resource "aws_api_gateway_integration" "get_integration" {
 }
 
 resource "aws_api_gateway_method_response" "response_302" {
-  rest_api_id =
-  resource_id =
-  http_method =
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.geturl.id
+  http_method = aws_api_gateway_method.get_method.http_method
   status_code = "302"
 
   response_parameters = {
@@ -134,9 +399,9 @@ resource "aws_api_gateway_method_response" "response_302" {
 }
 
 resource "aws_api_gateway_integration_response" "get_integration_response" {
-  rest_api_id =
-  resource_id =
-  http_method =
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  resource_id = aws_api_gateway_resource.geturl.id
+  http_method = aws_api_gateway_method.get_method.http_method
   status_code = aws_api_gateway_method_response.response_302.status_code
 
   response_parameters = {
